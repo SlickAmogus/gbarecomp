@@ -462,16 +462,31 @@ void GbaBus::write8(uint32_t addr, uint8_t v) {
     switch (region) {
         case Region::Ewram: ewram_[off] = v; return;
         case Region::Iwram: iwram_[off] = v; return;
-        case Region::Pal:   pal_[off]   = v; return;
-        case Region::Vram:
-            if (off < vram_.size()) {
-                vram_[off] = v;
+        // Palette, VRAM and OAM sit on a 16-bit data bus with no byte strobes.
+        // An 8-bit store to palette or BG VRAM lands in BOTH bytes of the
+        // addressed halfword; one to OBJ VRAM or OAM is dropped (GBATEK
+        // "GBA Memory Map" notes; mGBA GBAStore8). Software renderers rely on
+        // the duplication to draw double-width pixels with one STRB.
+        case Region::Pal: {
+            const auto even = off & ~std::size_t{1};
+            pal_[even] = v;
+            pal_[even + 1] = v;
+            return;
+        }
+        case Region::Vram: {
+            const bool bitmap_mode = (io_dispatch_.read16(0x000) & 7u) >= 3u;
+            if (off >= (bitmap_mode ? 0x14000u : 0x10000u)) return;
+            const auto even = off & ~std::size_t{1};
+            if (even + 1 < vram_.size()) {
+                vram_[even] = v;
+                vram_[even + 1] = v;
 #if defined(GBARECOMP_NATIVE_DRAW_JOBS)
-                if (draw_memory_ && !draw_vram_alias_exposed_) draw_memory_->mark(off, 1);
+                if (draw_memory_ && !draw_vram_alias_exposed_) draw_memory_->mark(even, 2);
 #endif
             }
             return;
-        case Region::Oam:   oam_[off] = v; return;
+        }
+        case Region::Oam:   return;
         case Region::Bios:
             // BIOS is read-only; hardware ignores writes to this window.
             return;

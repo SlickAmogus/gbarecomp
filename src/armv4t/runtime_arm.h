@@ -489,6 +489,8 @@ extern unsigned long long g_runtime_state_epoch;
 // at machine reset (runtime_trace_reset). Stamped onto every ring entry so the
 // recomp and interp oracle can be aligned by identical cycle counts. (MC-HP-002.)
 extern unsigned long long g_runtime_cycles;
+// See runtime_bus_bridge.cpp: game-owned CPU time discount (0 = exact timing).
+extern unsigned g_runtime_cycle_discount_shift;
 
 // P6 sljit differential gate — shadow-tick mode. While g_runtime_shadow_tick is
 // nonzero (only during a healed shard's throwaway validation re-run) runtime_tick

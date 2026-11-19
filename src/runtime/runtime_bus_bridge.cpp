@@ -143,6 +143,12 @@ extern "C" uint32_t g_irq_nest_depth;
 // fixed-quantum clock.) runtime_trace_event stamps this onto every ring entry
 // so the recomp and the bios_smoke interp oracle align by identical cycles.
 extern "C" unsigned long long g_runtime_cycles = 0;
+// Game-owned CPU time discount: while non-zero, guest instructions are charged
+// 1/2^N of their cycles (the remainder carries over, so no time is lost to
+// rounding). Device time is unaffected. A trusted game hook uses this around
+// guest work whose output it replaces natively. 0 = exact timing.
+extern "C" unsigned g_runtime_cycle_discount_shift = 0;
+static uint32_t g_cycle_discount_carry = 0;
 
 // ── Stage 2 idle-loop elision: disturbance epoch + skip counters ─────────────
 // Bumped whenever something happens that could change a watched poll value or
@@ -810,6 +816,12 @@ extern "C" void runtime_tick(uint32_t cycles) {
     // cycle cost (for the cycle diff); the interpreter pass already pumped the
     // devices / delivered IRQs for this window, so do nothing else here.
     if (g_runtime_shadow_tick) { g_runtime_shadow_cycles += cycles; return; }
+    if (g_runtime_cycle_discount_shift) {
+        const unsigned shift = g_runtime_cycle_discount_shift > 8u ? 8u : g_runtime_cycle_discount_shift;
+        g_cycle_discount_carry += cycles;
+        cycles = g_cycle_discount_carry >> shift;
+        g_cycle_discount_carry &= (1u << shift) - 1u;
+    }
 
     auto* bus = gbarecomp::g_active_bus;
     auto* ppu = gbarecomp::g_active_ppu;

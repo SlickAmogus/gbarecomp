@@ -295,6 +295,7 @@ std::vector<RamCodeTemplate> collect_ram_code_templates(
                 if (length % step != 0 || source_pc < image_base ||
                     uint64_t(source_pc - image_base) + length > image_size) break;
                 const auto offset = std::size_t(source_pc - image_base);
+                std::vector<std::vector<uint8_t>> variants;
                 for (unsigned initialized=0;initialized<2;++initialized) {
                 std::vector<uint8_t> bytes(image + offset, image + offset + length);
                 bool patched=false;
@@ -312,6 +313,41 @@ std::vector<RamCodeTemplate> collect_ram_code_templates(
                     }
                 }
                 if (initialized && !patched) continue;
+                variants.push_back(std::move(bytes));
+                }
+                // Copied ARM routines that specialise themselves commonly do
+                // it by toggling an unconditional branch with a no-op (the
+                // branch skips an optional block). Offer the no-op forms as
+                // further byte-verified variants; they match only when live
+                // RAM really holds them.
+                if (original.mode==CpuMode::Arm) {
+                    constexpr uint32_t kArmNop = 0xE1A00000u;   // mov r0, r0
+                    const std::vector<uint8_t> pristine = variants.front();
+                    std::vector<uint32_t> slots;
+                    for (uint32_t n=0;n+4u<=length;n+=4u) {
+                        uint32_t raw=0;
+                        for (uint32_t b=0;b<4u;++b) raw |= uint32_t(pristine[n+b])<<(8u*b);
+                        const auto ins=armv4t::ArmDecoder::decode(raw,kCanonicalBase+n);
+                        if (ins.op==armv4t::IrOp::B && ins.cond==armv4t::Cond::AL)
+                            slots.push_back(n);
+                    }
+                    auto add_variant=[&](uint32_t chosen) {
+                        std::vector<uint8_t> bytes=pristine;
+                        for (std::size_t s=0;s<slots.size();++s) {
+                            if (!(chosen & (1u<<s))) continue;
+                            for (uint32_t b=0;b<4u;++b)
+                                bytes[slots[s]+b]=uint8_t(kArmNop>>(8u*b));
+                        }
+                        variants.push_back(std::move(bytes));
+                    };
+                    if (slots.size()<=4u) {
+                        for (uint32_t chosen=1u;chosen<(1u<<slots.size());++chosen)
+                            add_variant(chosen);
+                    } else {
+                        for (std::size_t s=0;s<slots.size();++s) add_variant(1u<<s);
+                    }
+                }
+                for (auto& bytes : variants) {
                 if (seen.emplace(original.mode, bytes).second) {
                     Function fn{};
                     fn.addr = kCanonicalBase;

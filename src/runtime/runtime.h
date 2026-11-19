@@ -221,6 +221,22 @@ struct RunOptions {
     // present after the game image, before the settings menu; guest thread.
     void (*host_overlay)(HostOverlay* overlay) = nullptr;
 
+    // Optional game-owned replacement for the presented image. Called on the
+    // guest thread for every present of a live frame, with the guest frame
+    // (RGB888, guest_width x guest_height) and the window's drawable size.
+    // Returning non-zero with `argb` set presents that image (0xAARRGGBB,
+    // row-major, width x height) across the whole drawable instead; it must
+    // stay valid until the next call. Returning zero presents the guest frame
+    // as usual. Never called for headless runs.
+    struct PresentFrame {
+        const std::uint8_t* guest_rgb = nullptr;
+        unsigned guest_width = 0, guest_height = 0;
+        int drawable_width = 0, drawable_height = 0;
+        const std::uint32_t* argb = nullptr;    // out
+        unsigned width = 0, height = 0;         // out
+    };
+    int (*present_frame)(PresentFrame* frame) = nullptr;
+
     // Optional game-owned debug TCP commands (JSON line in, JSON line out).
     // Return non-zero when the request was handled and `reply` was written
     // through `write` (may be called repeatedly to stream a large reply).

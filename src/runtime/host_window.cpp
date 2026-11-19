@@ -363,6 +363,11 @@ struct Backend {
     std::shared_ptr<const gba::GbaNativeDrawFrame> native_frame;
 #endif
     SDL_Texture* resident_frame = nullptr;
+    // Game-supplied replacement frame (set_external_frame), one present only.
+    const std::uint32_t* ext_pixels = nullptr;
+    unsigned ext_w = 0, ext_h = 0;
+    SDL_Texture* ext_texture = nullptr;
+    int ext_tex_w = 0, ext_tex_h = 0;
     Uint32        texture_format = SDL_PIXELFORMAT_RGB24;
     std::vector<uint32_t> packed_upload;
     unsigned      presentation_source_w = 0, presentation_source_h = 0;
@@ -2563,6 +2568,7 @@ void HostWindow::close() {
 #endif
     destroy_sharp_texture(b);
     b->hd_gpu.reset();
+    if (b->ext_texture) SDL_DestroyTexture(b->ext_texture);
     if (b->texture)   SDL_DestroyTexture(b->texture);
     if (b->renderer)  SDL_DestroyRenderer(b->renderer);
     if (b->window)    SDL_DestroyWindow(b->window);
@@ -2719,6 +2725,42 @@ bool HostWindow::present_native(const std::shared_ptr<const gba::GbaNativeDrawFr
 #endif
 
 void HostWindow::present(const uint8_t* rgb888) { present(rgb888, 0, 0); }
+
+void HostWindow::set_external_frame(const std::uint32_t* argb, unsigned width, unsigned height) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->ext_pixels = argb; b->ext_w = width; b->ext_h = height;
+}
+
+// Draws the pending game-supplied frame across the whole drawable. Returns
+// false (leaving the normal guest frame to be drawn) if there is none or the
+// backend cannot take it.
+static bool present_external_frame(Backend* b) {
+    const std::uint32_t* pixels = b->ext_pixels;
+    b->ext_pixels = nullptr;
+    if (!pixels || !b->ext_w || !b->ext_h) return false;
+    if (!b->ext_texture || b->ext_tex_w != int(b->ext_w) || b->ext_tex_h != int(b->ext_h)) {
+        if (b->ext_texture) SDL_DestroyTexture(b->ext_texture);
+        b->ext_texture = SDL_CreateTexture(b->renderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, int(b->ext_w), int(b->ext_h));
+        if (!b->ext_texture) { b->ext_tex_w = b->ext_tex_h = 0; return false; }
+        SDL_SetTextureBlendMode(b->ext_texture, SDL_BLENDMODE_NONE);
+        b->ext_tex_w = int(b->ext_w); b->ext_tex_h = int(b->ext_h);
+        std::fprintf(stderr, "host_window: external frame %ux%u\n", b->ext_w, b->ext_h);
+    }
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    SDL_SetTextureScaleMode(b->ext_texture,
+        b->linear_filter ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+#endif
+    if (SDL_UpdateTexture(b->ext_texture, nullptr, pixels, int(b->ext_w) * 4) != 0) return false;
+    int logical_w = 0, logical_h = 0;
+    SDL_RenderGetLogicalSize(b->renderer, &logical_w, &logical_h);
+    SDL_RenderSetLogicalSize(b->renderer, 0, 0);
+    SDL_RenderSetViewport(b->renderer, nullptr);
+    const bool ok = SDL_RenderCopy(b->renderer, b->ext_texture, nullptr, nullptr) == 0;
+    SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
+    return ok;
+}
 
 void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sampled_h) {
     if (!open_ || !impl_) return;
@@ -2878,6 +2920,7 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
         std::fflush(stderr);
     }
     if (touch_input_enabled(b)) publish_touch_presentation(b);
+    if (!present_external_frame(b)) {
 #if defined(__ANDROID__)
     const SDL_Rect destination{layout.x, layout.y, layout.width, layout.height};
     SDL_RenderCopy(b->renderer, frame_texture, nullptr, &destination);
@@ -2937,6 +2980,7 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
         SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_NONE);
         SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
     }
+    }  // !present_external_frame
     render_host_layers(b);
     // MC-WS-002: time the present itself (vsync blocks here — or doesn't)
     // and stamp the DWM refresh counter into the cadence ring.
@@ -3065,6 +3109,18 @@ void HostWindow::set_fullscreen(int mode) {
     Uint32 flag = mode == 2 ? SDL_WINDOW_FULLSCREEN
                 : mode == 1 ? SDL_WINDOW_FULLSCREEN_DESKTOP
                             : 0;
+    // Exclusive fullscreen keeps the desktop's own resolution and refresh
+    // rate. Left to itself SDL picks the display mode closest to the window's
+    // size (a few hundred pixels), which switches the monitor to a tiny mode.
+    if (mode == 2) {
+        SDL_DisplayMode desktop;
+        const int display = SDL_GetWindowDisplayIndex(b->window);
+        if (display >= 0 && SDL_GetDesktopDisplayMode(display, &desktop) == 0)
+            SDL_SetWindowDisplayMode(b->window, &desktop);
+    }
+    // Going straight from one fullscreen kind to the other leaves the window
+    // at its old size in a corner of the screen; pass through windowed.
+    if (b->fullscreen != 0 && mode != 0) SDL_SetWindowFullscreen(b->window, 0);
     if (SDL_SetWindowFullscreen(b->window, flag) == 0) {
         b->fullscreen = mode;
         // Record which panel/mode the cadence data now runs on.
@@ -3463,7 +3519,14 @@ HostWindow::Events HostWindow::pump() {
             continue;
         }
         if (mouse_event && suppress_opening_touch) continue;
-        if (b->runtime_imgui_ready) {
+        // While the game has the mouse in relative mode (mouse aim), the UI
+        // must not see mouse events: its SDL backend would treat holding a
+        // button while moving as a drag and take, then release, the system
+        // mouse capture, which knocks the window out of relative mode.
+        // (Releases still pass, so a press from before the capture cannot stick.)
+        const bool game_owns_mouse = mouse_event && e.type != SDL_MOUSEBUTTONUP &&
+            SDL_GetRelativeMouseMode() == SDL_TRUE;
+        if (b->runtime_imgui_ready && !game_owns_mouse) {
             ImGui::SetCurrentContext(b->runtime_imgui_context);
             ImGui_ImplSDL2_ProcessEvent(&e);
         }
@@ -3893,6 +3956,7 @@ void HostWindow::set_touch_pad_visible(bool /*visible*/) {}
 void HostWindow::set_view_margins(std::uint32_t, std::uint32_t, std::uint32_t,
                                   std::uint32_t) {}
 void HostWindow::set_host_overlay(void (*)(HostOverlay*)) {}
+void HostWindow::set_external_frame(const std::uint32_t*, unsigned, unsigned) {}
 float HostWindow::px_per_mm() const { return 96.0f / 25.4f; }
 void HostWindow::set_presentation_anchor_top(bool) {}
 bool HostWindow::wait_for_foreground() { return false; }

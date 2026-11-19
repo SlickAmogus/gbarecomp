@@ -3176,7 +3176,18 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             const auto* hd = ppu.high_resolution();
             win.present(pixels, hd->width(), hd->height());
             ++high_resolution_presented;
-        } else win.present(live_fb.data());
+        } else {
+            if (opts.present_frame) {
+                RunOptions::PresentFrame frame;
+                frame.guest_rgb = live_fb.data();
+                frame.guest_width = ppu.render_width();
+                frame.guest_height = ppu.render_height();
+                if (win.drawable_size(&frame.drawable_width, &frame.drawable_height) &&
+                    opts.present_frame(&frame) && frame.argb)
+                    win.set_external_frame(frame.argb, frame.width, frame.height);
+            }
+            win.present(live_fb.data());
+        }
 #if defined(GBARECOMP_GPU_HD_EXPERIMENT)
         if (current_hd && current_hd->deferred_rendering() && !win.hd_jobs_available())
             ppu.set_deferred_hd_rendering(false);
