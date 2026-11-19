@@ -234,8 +234,19 @@ struct RunOptions {
         int drawable_width = 0, drawable_height = 0;
         const std::uint32_t* argb = nullptr;    // out
         unsigned width = 0, height = 0;         // out
+        // How far through the guest frame's time slot this present happens,
+        // 0..1 (0 when the session is not paced). A game that blends between
+        // guest states uses it to show the state that belongs to the moment.
+        float phase = 0.0f;
     };
     int (*present_frame)(PresentFrame* frame) = nullptr;
+    // Optional: how many times to present per guest frame (1..8, default 1).
+    // With more than one, present_frame is called again at even points of
+    // the guest frame's time slot, with the guest frame unchanged and `phase`
+    // advancing, so a game that draws its own picture can show motion at a
+    // multiple of the guest's 59.7 Hz. Extra presents are skipped when the
+    // session is uncapped, fast-forwarding, or running late.
+    int (*present_subframes)() = nullptr;
 
     // Optional game-owned debug TCP commands (JSON line in, JSON line out).
     // Return non-zero when the request was handled and `reply` was written

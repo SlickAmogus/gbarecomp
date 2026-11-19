@@ -3139,6 +3139,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     };
     FramePhaseRing frame_phase;
     uint64_t high_resolution_presented = 0;
+    // Set once the session's pacer exists (it is created further down).
+    FramePacer* present_pacer = nullptr;
     auto present_live_frame = [&]() {
 #if defined(GBARECOMP_NATIVE_DRAW_JOBS)
         const bool had_native_frame=bool(ppu.native_draw_frame());
@@ -3182,6 +3184,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 frame.guest_rgb = live_fb.data();
                 frame.guest_width = ppu.render_width();
                 frame.guest_height = ppu.render_height();
+                frame.phase = present_pacer ? static_cast<float>(present_pacer->phase()) : 0.0f;
                 if (win.drawable_size(&frame.drawable_width, &frame.drawable_height) &&
                     opts.present_frame(&frame) && frame.argb)
                     win.set_external_frame(frame.argb, frame.width, frame.height);
@@ -3192,6 +3195,27 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         if (current_hd && current_hd->deferred_rendering() && !win.hd_jobs_available())
             ppu.set_deferred_hd_rendering(false);
 #endif
+    };
+    // A game that draws its own picture may ask for more presents per guest
+    // frame (RunOptions::present_subframes). They are spread evenly over the
+    // frame's time slot, before the pacer's wait for the next guest frame.
+    auto present_extra_frames = [&](bool fast_forward) {
+        if (!opts.present_frame || !opts.present_subframes || !present_pacer ||
+            present_pacer->uncapped() || fast_forward) return;
+        const int presents = std::clamp(opts.present_subframes(), 1, 8);
+        for (int k = 1; k < presents; ++k) {
+            if (!present_pacer->wait_until_phase(static_cast<double>(k) / presents,
+                                                 0.5 / presents)) continue;
+            RunOptions::PresentFrame frame;
+            frame.guest_rgb = live_fb.data();
+            frame.guest_width = ppu.render_width();
+            frame.guest_height = ppu.render_height();
+            frame.phase = static_cast<float>(present_pacer->phase());
+            if (!win.drawable_size(&frame.drawable_width, &frame.drawable_height) ||
+                !opts.present_frame(&frame) || !frame.argb) break;
+            win.set_external_frame(frame.argb, frame.width, frame.height);
+            win.present(live_fb.data());
+        }
     };
     auto apply_runtime_view_geometry = [&](ViewGeometry geometry) -> bool {
         if (opts.view_geometry) opts.view_geometry(&geometry, 0, 0);
@@ -3698,6 +3722,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         sync_resize_driven_view();
         if (live_fb.empty()) live_fb.assign(ppu.render_bytes(), 0);
         pacer.emplace();  // paces to the GBA's 59.7275 Hz by default
+        present_pacer = &*pacer;
         pacer->set_uncapped(args.uncapped); // no frame skipping/audio suppression
     }
 
@@ -4733,6 +4758,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                     ++frames_presented;
                     if (args.frames >= 0 && frames_presented >= args.frames)
                         host_quit = true;
+                    present_extra_frames(fast_forward_active);
                     if (pacer) pacer->wait_for_next_frame(banked_frames);
                 }
                 if (phase_active) {
@@ -5177,6 +5203,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                     // Normal play presents/paces every frame. Fast-forward
                     // runs N guest frames per one paced host presentation,
                     // making its selected multiplier independent of monitor Hz.
+                    present_extra_frames(fast_forward_active);
                     if (pacer) pacer->wait_for_next_frame(banked_frames);
                 }
                 if (phase_active) {

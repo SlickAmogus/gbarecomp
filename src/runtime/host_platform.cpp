@@ -51,6 +51,29 @@ void FramePacer::reset() {
     next_ = clock::now() + period_;
 }
 
+double FramePacer::phase() const {
+    if (uncapped_) return 0.0;
+    const auto into = clock::now() - (next_ - period_);
+    const double p = std::chrono::duration<double>(into).count() /
+                     std::chrono::duration<double>(period_).count();
+    return p < 0.0 ? 0.0 : p > 1.0 ? 1.0 : p;
+}
+
+bool FramePacer::wait_until_phase(double target, double slack) {
+    if (uncapped_) return false;
+    const auto slot = std::chrono::duration_cast<std::chrono::nanoseconds>(period_ * target);
+    const clock::time_point due = next_ - period_ + slot;
+    const clock::time_point now = clock::now();
+    if (now > due + std::chrono::duration_cast<std::chrono::nanoseconds>(period_ * slack)) return false;
+    if (due > now) {
+        // Coarse sleep, then yield through the last stretch for accuracy.
+        constexpr auto kTail = std::chrono::microseconds(1500);
+        if (due - now > kTail) std::this_thread::sleep_until(due - kTail);
+        while (clock::now() < due) std::this_thread::yield();
+    }
+    return true;
+}
+
 void FramePacer::wait_for_next_frame(uint64_t frames) {
     if (uncapped_) {
         next_ = clock::now();  // keep the deadline current for re-cap

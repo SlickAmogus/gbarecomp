@@ -57,6 +57,15 @@ public:
     // (startup, save-state load) so the pacer doesn't try to catch up.
     void reset();
 
+    // Sub-frame presentation (a game that presents more than once per guest
+    // frame). phase() is how far through the current guest frame's time slot
+    // "now" is: 0 at its start, 1 at the deadline wait_for_next_frame() will
+    // wait for. wait_until_phase() blocks until that point of the slot and
+    // returns false, without waiting, when it has already passed by more
+    // than `slack` (or while uncapped), so a late caller skips that present.
+    double phase() const;
+    bool wait_until_phase(double target, double slack);
+
     // Fast-forward toggle. While uncapped, wait_for_next_frame() returns
     // immediately and the deadline tracks now.
     void set_uncapped(bool on) { uncapped_ = on; }
