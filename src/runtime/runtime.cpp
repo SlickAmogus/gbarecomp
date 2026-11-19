@@ -1665,8 +1665,16 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 rom_sha1!=lower_ascii(opts.builtin_rom_sha1) ||
                 bios.sha1_hex()!=gba::GbaBios::kExpectedSha1)
                 throw std::runtime_error("netplay requires this build's original ROM and retail BIOS");
+            // The game's own data-only preparation, after the original
+            // cartridge is verified: every peer derives the same image, and
+            // the startup state digest would catch any peer that did not.
+            std::string prepared_sha1 = rom_sha1;
+            if (opts.prepare_mod_rom_data &&
+                !mod_rom_data_internal::prepare(opts, rom, &prepared_sha1, &err, nullptr))
+                throw std::runtime_error("ROM data preparation failed: " + err);
             GbaNetplayBoot boot;
-            boot.bios=&bios; boot.rom=&rom; boot.expected_rom_sha1=opts.builtin_rom_sha1;
+            // The image the session runs: the verified cartridge, prepared.
+            boot.bios=&bios; boot.rom=&rom; boot.expected_rom_sha1=prepared_sha1;
             boot.rom_path=args.rom; boot.bios_path=args.bios;
             boot.title=opts.builtin_game_name ? opts.builtin_game_name : "GBA";
             boot.screen=args.screen; boot.scale=args.scale; boot.fullscreen=args.fullscreen;
@@ -1735,6 +1743,27 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             args.resize_view = gba_mod_adaptive_view_enabled() != 0;
     }
 #endif
+    std::string game_prepared_source_sha1;   // the original cartridge, when prepared below
+    // A game's own data-only preparation (restoring a menu, fixing a table)
+    // applies without any mod package selected, and in netplay too, where
+    // every peer prepares the same image from the same verified cartridge.
+    {
+#if defined(GBARECOMP_ENABLE_MODS)
+        const bool prepared_above = mods_ready;
+#else
+        const bool prepared_above = false;
+#endif
+        if (!prepared_above && opts.prepare_mod_rom_data) {
+            const std::string source_sha1 = rom_sha1;
+            game_prepared_source_sha1 = rom_sha1;
+            if (!mod_rom_data_internal::prepare(opts, rom, &rom_sha1, &err, nullptr)) {
+                std::fprintf(stderr, "[gbarecomp:runtime] ROM data preparation failed: %s\n", err.c_str());
+                return 1;
+            }
+            if (rom_sha1 != source_sha1 && !args.quiet)
+                std::fprintf(stderr, "[gbarecomp:runtime] prepared ROM data sha1=%s\n", rom_sha1.c_str());
+        }
+    }
     if (selected_native_program) {
         runtime_select_native_program(selected_native_program->program);
         if (args.save_path.empty()) {
@@ -2502,6 +2531,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         sc.bus            = &bus;
         sc.ppu            = &ppu;
         sc.rom_sha1       = rom_sha1.c_str();
+        if (!game_prepared_source_sha1.empty() && game_prepared_source_sha1 != rom_sha1)
+            sc.source_rom_sha1 = game_prepared_source_sha1.c_str();
         sc.taken          = &taken;
         sc.cycles_elapsed = &cycles_elapsed;
         sc.vblank_count   = &vblank_count;

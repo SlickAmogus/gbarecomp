@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
 #include <fstream>
 #include <stdexcept>
 
@@ -127,7 +130,28 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
     window.set_fullscreen(boot.fullscreen); window.set_volume(boot.volume);
     window.set_fps_readout(boot.show_fps);
     std::uint16_t buttons=0;
-    match.sample_local=[&](std::uint32_t) { return buttons; };
+    // Test aid (scripted two-process runs with the SDL dummy driver):
+    // GBARECOMP_NETPLAY_SCRIPT names a text file of "first_tick last_tick
+    // mask" lines (mask = pad buttons held, KEYINPUT bit order, 1 = down);
+    // inside a listed range the script replaces this seat's keyboard input.
+    struct ScriptRow { std::uint32_t first, last; std::uint16_t mask; };
+    std::vector<ScriptRow> script;
+    if (const char* path=std::getenv("GBARECOMP_NETPLAY_SCRIPT")) {
+        std::ifstream in(path);
+        unsigned long first=0,last=0; std::string mask;
+        while (in>>first>>last>>mask)
+            script.push_back({static_cast<std::uint32_t>(first),static_cast<std::uint32_t>(last),
+                              static_cast<std::uint16_t>(std::stoul(mask,nullptr,0)&0x3ff)});
+    }
+    match.sample_local=[&](std::uint32_t tick) {
+        for (const ScriptRow& row:script)
+            if (tick>=row.first && tick<=row.last) return row.mask;
+        return script.empty() ? buttons : std::uint16_t{0};
+    };
+    // Test aid: GBARECOMP_NETPLAY_DUMP=prefix writes the local picture as
+    // prefix_<frame>.ppm every 60 presented frames.
+    const char* dump_prefix=std::getenv("GBARECOMP_NETPLAY_DUMP");
+    unsigned long presented_frames=0;
     GbaNetplayPacer pacer;
     GbaNetplayOutput output;
     std::string previous_title;
@@ -198,6 +222,14 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                     throw std::runtime_error("cannot resize netplay presentation surface");
                 window.set_view_margins((width-240)/2,(width-240)-(width-240)/2,0,0);
                 window.present(pixels,presentation->width(),presentation->height());
+                if (dump_prefix && ++presented_frames%60==0) {
+                    const std::string name=std::string(dump_prefix)+"_"+std::to_string(presented_frames)+".ppm";
+                    if (std::FILE* f=std::fopen(name.c_str(),"wb")) {
+                        std::fprintf(f,"P6\n%u %u\n255\n",presentation->width(),presentation->height());
+                        std::fwrite(pixels,3,static_cast<std::size_t>(presentation->width())*presentation->height(),f);
+                        std::fclose(f);
+                    }
+                }
             }
             std::size_t offset=0;
             for (const auto& block:output.audio_blocks) {

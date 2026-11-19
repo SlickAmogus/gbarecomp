@@ -122,6 +122,11 @@ struct SnapshotContext {
     gba::GbaBus* bus = nullptr;
     gba::GbaPpu* ppu = nullptr;
     const char*  rom_sha1 = nullptr;
+    // A game's own data-only preparation of the cartridge (RunOptions::
+    // prepare_mod_rom_data without mod packages) changes rom_sha1 but no code
+    // or guest-visible state layout: states saved against the original
+    // cartridge it was prepared from load too. Null = rom_sha1 only.
+    const char*  source_rom_sha1 = nullptr;
 
     uint64_t* taken          = nullptr;
     uint64_t* cycles_elapsed = nullptr;

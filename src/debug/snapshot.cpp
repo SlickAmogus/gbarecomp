@@ -239,7 +239,10 @@ bool load_state_bytes(const uint8_t* data, std::size_t size,
     if (ctx.rom_sha1 && *ctx.rom_sha1) {
         char want[kRomSha1Len];
         fill_rom_sha1(want, ctx.rom_sha1);
-        if (std::memcmp(file_sha1, want, kRomSha1Len) != 0) {
+        char source[kRomSha1Len];
+        const bool from_source = ctx.source_rom_sha1 && *ctx.source_rom_sha1 &&
+            (fill_rom_sha1(source, ctx.source_rom_sha1), std::memcmp(file_sha1, source, kRomSha1Len) == 0);
+        if (std::memcmp(file_sha1, want, kRomSha1Len) != 0 && !from_source) {
             if (err) *err = "snapshot: ROM SHA-1 mismatch (state was saved "
                             "against a different ROM)";
             return false;
