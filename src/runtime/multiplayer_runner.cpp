@@ -149,7 +149,7 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
         return script.empty() ? buttons : std::uint16_t{0};
     };
     // Test aid: GBARECOMP_NETPLAY_DUMP=prefix writes the local picture as
-    // prefix_<frame>.ppm every 60 presented frames.
+    // prefix_<frame>.ppm every 60 presented frames, and each machine's EWRAM.
     const char* dump_prefix=std::getenv("GBARECOMP_NETPLAY_DUMP");
     unsigned long presented_frames=0;
     GbaNetplayPacer pacer;
@@ -228,6 +228,16 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                         std::fprintf(f,"P6\n%u %u\n255\n",presentation->width(),presentation->height());
                         std::fwrite(pixels,3,static_cast<std::size_t>(presentation->width())*presentation->height(),f);
                         std::fclose(f);
+                    }
+                    // With each picture, every machine's EWRAM then IWRAM (prefix_<frame>_m<id>.ewram).
+                    for (unsigned id=0;id<players;++id) {
+                        const std::string mem=std::string(dump_prefix)+"_"+std::to_string(presented_frames)+
+                            "_m"+std::to_string(id)+".ewram";
+                        if (std::FILE* f=std::fopen(mem.c_str(),"wb")) {
+                            std::fwrite(simulation.machine(id).bus.ewram_ptr(),1,0x40000,f);
+                            std::fwrite(simulation.machine(id).bus.iwram_ptr(),1,0x8000,f);
+                            std::fclose(f);
+                        }
                     }
                 }
             }
