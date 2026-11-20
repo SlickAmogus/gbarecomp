@@ -269,6 +269,13 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                         if (std::FILE* f=std::fopen(mem.c_str(),"wb")) {
                             std::fwrite(simulation.machine(id).bus.ewram_ptr(),1,0x40000,f);
                             std::fwrite(simulation.machine(id).bus.iwram_ptr(),1,0x8000,f);
+                            // Then the IO registers 0x100..0x20F (timers,
+                            // serial, IE/IF), read16 each: these reads have
+                            // no side effects.
+                            for (std::uint32_t off=0x100;off<0x210;off+=2) {
+                                const std::uint16_t v=simulation.machine(id).bus.io().read16(off);
+                                std::fwrite(&v,2,1,f);
+                            }
                             std::fclose(f);
                         }
                     }

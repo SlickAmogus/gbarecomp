@@ -725,6 +725,20 @@ void GbaIo::write8(uint32_t off, uint8_t v) {
     }
     if (off >= kIoSize) { warn_unhandled(off, v, true, 1); return; }
     mmio_cap_record(0x04000000u + off, v, 1);
+    // Timers: a byte write changes half of the reload or control register
+    // and has the same effect as the 16-bit write it completes (starting a
+    // timer loads its counter). Link libraries start and stop their timer
+    // with STRB/ORR on TMxCNT_H; stored as a plain byte, the timer never ran.
+    if (off >= 0x100u && off < 0x110u) {
+        const uint32_t base = off & ~1u;
+        const int timer = static_cast<int>((base - 0x100u) / 4u);
+        const bool control = ((base - 0x100u) % 4u) == 2u;
+        const unsigned shift = (off & 1u) * 8u;
+        uint16_t merged = control ? timer_control_[timer] : timer_reload_[timer];
+        merged = static_cast<uint16_t>((merged & ~(0xFFu << shift)) | (static_cast<unsigned>(v) << shift));
+        write16_commit(base, merged, /*record=*/false);
+        return;
+    }
     // Audio registers (0x060..0x0AF) go to the audio subsystem on
     // top of the backing-array store, so the channel state machines
     // see triggers / envelope reloads / length resets.
