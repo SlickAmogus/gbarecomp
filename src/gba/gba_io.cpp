@@ -590,6 +590,11 @@ void GbaIo::set_keyinput(uint16_t keys) {
     store_u16(&io_[IoReg::KEYINPUT], composed_keyinput());
 }
 
+void GbaIo::set_host_keys_blocked(bool blocked) {
+    host_blocked_ = blocked;
+    store_u16(&io_[IoReg::KEYINPUT], composed_keyinput());
+}
+
 void GbaIo::set_synthesized_keyinput(uint16_t keys) {
     synth_keyinput_ = static_cast<uint16_t>(keys & 0x03FFu);
     store_u16(&io_[IoReg::KEYINPUT], composed_keyinput());

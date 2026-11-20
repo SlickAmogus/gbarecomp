@@ -213,8 +213,13 @@ public:
     uint16_t host_keyinput() const { return host_keyinput_; }
     uint16_t synthesized_keyinput() const { return synth_keyinput_; }
     uint16_t composed_keyinput() const {
-        return static_cast<uint16_t>(host_keyinput_ & synth_keyinput_ & 0x03FFu);
+        return static_cast<uint16_t>((host_blocked_ ? 0x03FFu : host_keyinput_) & synth_keyinput_ & 0x03FFu);
     }
+    // A game overlay that owns the keyboard (an in-game menu drawn by the
+    // port) hides the host keys from the guest while blocked; the guest then
+    // sees only the synthesized half. host_keyinput() still reports them.
+    void set_host_keys_blocked(bool blocked);
+    bool host_keys_blocked() const { return host_blocked_; }
 
     // Advance hardware timers by CPU cycles. Timer overflows raise IRQs,
     // clock direct-sound FIFOs, and advance the Timer 1..3 count-up chain.
@@ -266,6 +271,7 @@ private:
     // the composed register value in io_ is what savestates capture).
     uint16_t host_keyinput_ = 0x03FFu;
     uint16_t synth_keyinput_ = 0x03FFu;
+    bool host_blocked_ = false;
     std::size_t unmapped_count_ = 0;
     std::size_t dma_runs_[4]  = {0, 0, 0, 0};
     std::size_t dma_words_[4] = {0, 0, 0, 0};
