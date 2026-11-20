@@ -227,6 +227,19 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                 if (!window.set_surface_size(width,160))
                     throw std::runtime_error("cannot resize netplay presentation surface");
                 window.set_view_margins((width-240)/2,(width-240)-(width-240)/2,0,0);
+                GbaNetplayPresentFrame frame;
+                if (launch.present_frame) {
+                    frame.guest_rgb=pixels;
+                    frame.guest_width=presentation->width(); frame.guest_height=presentation->height();
+                    frame.local_bus=&simulation.input_machine(launch.local_seat).bus;
+                    if (!window.drawable_size(&frame.drawable_width,&frame.drawable_height) ||
+                        frame.drawable_width<=0 || frame.drawable_height<=0) {
+                        frame.drawable_width=960; frame.drawable_height=540;   // headless test runs
+                    }
+                    if (launch.present_frame(frame) && frame.argb)
+                        window.set_external_frame(frame.argb,frame.width,frame.height);
+                    else frame.argb=nullptr;
+                }
                 window.present(pixels,presentation->width(),presentation->height());
                 if (dump_prefix && ++presented_frames%60==0) {
                     const std::string name=std::string(dump_prefix)+"_"+std::to_string(presented_frames)+".ppm";
@@ -234,6 +247,20 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                         std::fprintf(f,"P6\n%u %u\n255\n",presentation->width(),presentation->height());
                         std::fwrite(pixels,3,static_cast<std::size_t>(presentation->width())*presentation->height(),f);
                         std::fclose(f);
+                    }
+                    // The game's own picture, when it drew one (prefix_<frame>_game.ppm).
+                    if (frame.argb) {
+                        const std::string game=std::string(dump_prefix)+"_"+std::to_string(presented_frames)+"_game.ppm";
+                        if (std::FILE* f=std::fopen(game.c_str(),"wb")) {
+                            std::fprintf(f,"P6\n%u %u\n255\n",frame.width,frame.height);
+                            std::vector<std::uint8_t> rgb(static_cast<std::size_t>(frame.width)*frame.height*3);
+                            for (std::size_t i=0;i<static_cast<std::size_t>(frame.width)*frame.height;++i) {
+                                rgb[i*3]=std::uint8_t(frame.argb[i]>>16); rgb[i*3+1]=std::uint8_t(frame.argb[i]>>8);
+                                rgb[i*3+2]=std::uint8_t(frame.argb[i]);
+                            }
+                            std::fwrite(rgb.data(),1,rgb.size(),f);
+                            std::fclose(f);
+                        }
                     }
                     // With each picture, every machine's EWRAM then IWRAM (prefix_<frame>_m<id>.ewram).
                     for (unsigned id=0;id<players;++id) {

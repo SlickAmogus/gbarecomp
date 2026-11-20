@@ -10,10 +10,25 @@
 #include <string>
 #include <vector>
 
-namespace gba { class GbaBios; }
+namespace gba { class GbaBios; class GbaBus; }
 namespace gbarecomp {
 struct GbaInstance;
 struct GbaNetplayLaunch;
+
+// A game that draws its own picture (as RunOptions::present_frame does in
+// single player) gets the local console's frame, the window's drawable size
+// and that console's bus; returning true with `argb` set presents that image
+// (0xAARRGGBB, width x height, valid until the next call) across the window.
+// Called on the application thread between simulation steps, so it may read
+// the bus but must not change guest state.
+struct GbaNetplayPresentFrame {
+    const std::uint8_t* guest_rgb = nullptr;
+    unsigned guest_width = 0, guest_height = 0;
+    int drawable_width = 0, drawable_height = 0;
+    gba::GbaBus* local_bus = nullptr;
+    const std::uint32_t* argb = nullptr;    // out
+    unsigned width = 0, height = 0;         // out
+};
 
 // The ordinary runtime resolves and verifies assets once, then hands them to
 // the optional netplay runner before activating mods or single-player saves.
@@ -62,6 +77,7 @@ struct GbaNetplayLaunch {
     std::string program_id, build_identity, content_sha256;
     void (*setup_instance)(GbaInstance&)=nullptr;
     std::function<void()> pump_lobby;
+    std::function<bool(GbaNetplayPresentFrame&)> present_frame;
     // Installed by make_gba_netplay_launch. This dependency boundary keeps
     // single-player games free of a recomp-net link requirement.
     int (*run)(const GbaNetplayLaunch&,const GbaNetplayBoot&)=nullptr;
