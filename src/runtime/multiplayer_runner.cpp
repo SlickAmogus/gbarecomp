@@ -134,6 +134,7 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
     // GBARECOMP_NETPLAY_SCRIPT names a text file of "first_tick last_tick
     // mask" lines (mask = pad buttons held, KEYINPUT bit order, 1 = down);
     // inside a listed range the script replaces this seat's keyboard input.
+    // Not only a test aid: games use it for an agreed opening sequence.
     struct ScriptRow { std::uint32_t first, last; std::uint16_t mask; };
     std::vector<ScriptRow> script;
     if (const char* path=std::getenv("GBARECOMP_NETPLAY_SCRIPT")) {
@@ -143,10 +144,15 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
             script.push_back({static_cast<std::uint32_t>(first),static_cast<std::uint32_t>(last),
                               static_cast<std::uint16_t>(std::stoul(mask,nullptr,0)&0x3ff)});
     }
+    // Until the script's last tick the keyboard is ignored (no buttons between
+    // rows); after it the player has the controls. A game uses this to step
+    // both consoles through its menus to an agreed mode at the start.
+    std::uint32_t script_end=0;
+    for (const ScriptRow& row:script) script_end=std::max(script_end,row.last);
     match.sample_local=[&](std::uint32_t tick) {
         for (const ScriptRow& row:script)
             if (tick>=row.first && tick<=row.last) return row.mask;
-        return script.empty() ? buttons : std::uint16_t{0};
+        return (script.empty() || tick>script_end) ? buttons : std::uint16_t{0};
     };
     // Test aid: GBARECOMP_NETPLAY_DUMP=prefix writes the local picture as
     // prefix_<frame>.ppm every 60 presented frames, and each machine's EWRAM.
