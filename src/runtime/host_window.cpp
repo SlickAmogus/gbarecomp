@@ -3681,6 +3681,7 @@ HostWindow::Events HostWindow::pump() {
             Uint16 mods = e.key.keysym.mod;
             if (sym == SDLK_ESCAPE) {
                 ev.quit = true;
+                ev.escape = true;
             } else if (sym >= SDLK_F1 && sym <= SDLK_F9) {
                 int slot = static_cast<int>(sym - SDLK_F1) + 1;
                 if (mods & KMOD_SHIFT) ev.save_slot = slot;

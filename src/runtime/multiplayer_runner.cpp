@@ -162,12 +162,27 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
     GbaNetplayOutput output;
     std::string previous_title;
     bool closing=false;
+    bool ended=false;
+    auto end=[&](bool local,const std::string& reason) {
+        if (!ended && launch.on_end) launch.on_end(local,reason);
+        ended=true;
+    };
+    // Esc with escape_leaves off: armed until this time, a second Esc leaves.
+    auto leave_armed_until=GbaNetplayPacer::Clock::time_point{};
+    auto next_wait_present=GbaNetplayPacer::Clock::time_point{};
+    try {
     while (true) {
         if (launch.pump_lobby) launch.pump_lobby();
-        const auto events=window.pump();
-        if (events.terminating) return 0; // keep the previous durable pair
+        auto events=window.pump();
+        if (events.terminating) { end(true,""); return 0; } // keep the previous durable pair
+        if (events.quit && events.escape && !launch.escape_leaves && !closing) {
+            const auto t=GbaNetplayPacer::Clock::now();
+            if (t>=leave_armed_until) { leave_armed_until=t+std::chrono::seconds(3); events.quit=false; }
+        }
         if (events.quit) {
-            if (closing || match.phase()==GbaNetplayMatch::Phase::Starting) return 0;
+            // No save can be agreed with a peer that is not there.
+            if (closing || match.phase()==GbaNetplayMatch::Phase::Starting ||
+                match.connection().phase==GbaConnectionPhase::Reconnecting) { end(true,""); return 0; }
             closing=true; match.request_checkpoint();
         }
         if (events.save_slot && match.phase()==GbaNetplayMatch::Phase::Running) {
@@ -191,8 +206,10 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
         const auto now=GbaNetplayPacer::Clock::now();
         const auto step=match.poll(pacer.ready(now));
         if (step==GbaNetplayMatch::Step::Forward) pacer.forwarded(now);
-        if (match.phase()==GbaNetplayMatch::Phase::Failed)
+        if (match.phase()==GbaNetplayMatch::Phase::Failed) {
+            end(false,match.error());
             throw std::runtime_error(match.error());
+        }
         if (match.checkpoint_pending() && !boot.finish_tick) closing=true;
         if (match.phase()==GbaNetplayMatch::Phase::CheckpointReady) {
             std::string error;
@@ -203,6 +220,7 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
             std::printf("netplay replay=%llu view=%u\n",static_cast<unsigned long long>(match.replay_ticks()),
                 static_cast<unsigned>(launch.view));
             std::printf("netplay saved pair=%s\n",checkpoint_absolute.string().c_str());
+            end(closing,closing ? "" : "the other player left the match");
             const auto until=GbaNetplayPacer::Clock::now()+std::chrono::seconds(1);
             while (GbaNetplayPacer::Clock::now()<until) {
                 if (launch.pump_lobby) launch.pump_lobby();
@@ -232,6 +250,8 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                     frame.guest_rgb=pixels;
                     frame.guest_width=presentation->width(); frame.guest_height=presentation->height();
                     frame.local_bus=&simulation.input_machine(launch.local_seat).bus;
+                    frame.tick=match.next_tick(); frame.opening_end=script_end;
+                    frame.leave_armed=GbaNetplayPacer::Clock::now()<leave_armed_until;
                     if (!window.drawable_size(&frame.drawable_width,&frame.drawable_height) ||
                         frame.drawable_width<=0 || frame.drawable_height<=0) {
                         frame.drawable_width=960; frame.drawable_height=540;   // headless test runs
@@ -287,8 +307,33 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                 offset+=block.count;
             }
         }
+        // Waiting for a peer: the consoles stand still and the title bar is
+        // not seen in fullscreen, so the game shows the wait over the last
+        // picture (a few times a second).
+        if (connection.phase==GbaConnectionPhase::Reconnecting && launch.present_frame) {
+            const auto t=GbaNetplayPacer::Clock::now();
+            const auto* pixels=presentation->pixels();
+            if (pixels && t>=next_wait_present) {
+                next_wait_present=t+std::chrono::milliseconds(200);
+                GbaNetplayPresentFrame frame;
+                frame.guest_rgb=pixels;
+                frame.guest_width=presentation->width(); frame.guest_height=presentation->height();
+                frame.local_bus=&simulation.input_machine(launch.local_seat).bus;
+                frame.tick=match.next_tick(); frame.opening_end=script_end;
+                frame.leave_armed=t<leave_armed_until;
+                frame.reconnect_seconds=(connection.grace_remaining_ms+999)/1000;
+                if (!window.drawable_size(&frame.drawable_width,&frame.drawable_height) ||
+                    frame.drawable_width<=0 || frame.drawable_height<=0) {
+                    frame.drawable_width=960; frame.drawable_height=540;
+                }
+                if (launch.present_frame(frame) && frame.argb)
+                    window.set_external_frame(frame.argb,frame.width,frame.height);
+                window.present(pixels,presentation->width(),presentation->height());
+            }
+        }
         if (step==GbaNetplayMatch::Step::Idle) pacer.idle();
     }
+    } catch (const std::exception& e) { end(false,e.what()); throw; }
 }
 }
 std::shared_ptr<GbaNetplayLaunch> make_gba_netplay_launch(std::string program,std::string build,

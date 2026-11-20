@@ -26,6 +26,14 @@ struct GbaNetplayPresentFrame {
     unsigned guest_width = 0, guest_height = 0;
     int drawable_width = 0, drawable_height = 0;
     gba::GbaBus* local_bus = nullptr;
+    // The session's tick, and the last tick of the agreed opening sequence
+    // (GBARECOMP_NETPLAY_SCRIPT; 0 = none): the keyboard is ignored before it.
+    std::uint32_t tick = 0, opening_end = 0;
+    // Esc was pressed once with escape_leaves off: a second Esc leaves.
+    bool leave_armed = false;
+    // Nonzero: waiting for a peer that stopped answering, seconds left before
+    // the match ends. The consoles stand still; this is the last picture again.
+    unsigned reconnect_seconds = 0;
     const std::uint32_t* argb = nullptr;    // out
     unsigned width = 0, height = 0;         // out
 };
@@ -78,6 +86,13 @@ struct GbaNetplayLaunch {
     void (*setup_instance)(GbaInstance&)=nullptr;
     std::function<void()> pump_lobby;
     std::function<bool(GbaNetplayPresentFrame&)> present_frame;
+    // Esc during a match: true leaves at once; false asks for a second Esc
+    // within three seconds (present_frame sees leave_armed meanwhile).
+    // Closing the window always leaves.
+    bool escape_leaves=true;
+    // Told once how the match ended, just before run returns or throws:
+    // local = this player left; otherwise reason says what happened.
+    std::function<void(bool local,const std::string& reason)> on_end;
     // Installed by make_gba_netplay_launch. This dependency boundary keeps
     // single-player games free of a recomp-net link requirement.
     int (*run)(const GbaNetplayLaunch&,const GbaNetplayBoot&)=nullptr;

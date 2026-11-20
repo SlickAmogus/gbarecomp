@@ -215,6 +215,7 @@ public:
 
     struct Events {
         bool     quit = false;
+        bool     escape = false;   // quit came from the Esc key (not the window's close)
         // GBA KEYINPUT layout. Active-low: 1 = released, 0 = pressed.
         // Bits: 0=A 1=B 2=Sel 3=Sta 4=Right 5=Left 6=Up 7=Down 8=R 9=L.
         uint16_t keyinput = 0x03FF;
