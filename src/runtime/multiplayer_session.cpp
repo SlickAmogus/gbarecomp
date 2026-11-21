@@ -41,7 +41,7 @@ template<class Archive, class Context> void execution_state(Archive& a, Context&
 }
 template<class Archive> void manifest(Archive& a, const GbaSessionConfig& config) {
     a.identity(std::uint32_t{0x53534247}); // GBSS
-    a.identity(std::uint32_t{2});
+    a.identity(std::uint32_t{3}); // 3: per-machine CPU time discount in the state
     a.identity(static_cast<std::uint32_t>(config.machines.size()));
     for (const auto& m : config.machines) {
         a.identity(m.id); a.text_identity(m.program_id); a.text_identity(m.rom_sha1); a.identity(m.boot);
@@ -191,7 +191,8 @@ void GbaMultiplayerSession::run_until(std::uint64_t target) {
                 // No newly started cable transfer can complete within this
                 // lookahead (normal 8-bit fast clock takes 64 cycles).
                 // Existing device events and the caller's boundary shorten it.
-                auto deadline=cycle_+std::min<std::uint64_t>(target-cycle_,63);
+                const std::uint64_t window=link_lookahead_ && cable_ ? cable_->safe_lookahead(link_lookahead_) : 63;
+                auto deadline=cycle_+std::min<std::uint64_t>(target-cycle_,window);
                 for (const auto& machine : machines_) {
                     const auto& device_io=machine->bus.io();
                     auto distance=std::min({machine->ppu.cycles_until_next_event(),
@@ -289,7 +290,7 @@ std::vector<std::uint8_t> GbaMultiplayerSession::save_state(GbaSessionStateLayou
     for (const auto& ptr : machines_) {
         const auto& m = *ptr;
         execution_state(a,m.execution);
-        a(m.timing.cycles,m.timing.vblank_starts);
+        a(m.timing.cycles,m.timing.vblank_starts,m.timing.discount_shift,m.timing.discount_carry);
         a.write_section(4*1024*1024,[&](auto& section) {
             gba::append_device_state(section,m.bus,m.ppu);
         });
@@ -319,7 +320,7 @@ bool GbaMultiplayerSession::load_state(std::span<const std::uint8_t> bytes, std:
             to.execution = from.execution; // retain trusted program callbacks
             to.immediate_override_is_observer = from.immediate_override_is_observer;
             execution_state(a,to.execution);
-            a(to.timing.cycles,to.timing.vblank_starts);
+            a(to.timing.cycles,to.timing.vblank_starts,to.timing.discount_shift,to.timing.discount_carry);
             std::vector<std::uint8_t> device;
             a.vector(device,4*1024*1024);
             if (!gba::load_device_state(to.bus,to.ppu,device))
@@ -372,7 +373,7 @@ std::array<std::uint32_t,3> GbaMultiplayerSession::state_hash_parts() const {
         auto& a = i ? rest : first;
         const auto& m = *machines_[i];
         execution_state(a,m.execution);
-        a(m.timing.cycles,m.timing.vblank_starts);
+        a(m.timing.cycles,m.timing.vblank_starts,m.timing.discount_shift,m.timing.discount_carry);
         a.write_section(4*1024*1024,[&](auto& section) {
             gba::append_device_state(section,m.bus,m.ppu);
         });

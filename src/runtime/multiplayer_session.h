@@ -69,6 +69,11 @@ public:
     // Differential reference for the host-only device ownership path. The
     // interval, device order and serialized simulation state are unchanged.
     void set_owned_device_intervals(bool enabled) { owned_device_intervals_ = enabled; }
+    // Opt-in (0 = off): a native slice may run up to this many cycles while
+    // every cable port is in multiplayer mode, kept under one transfer at the
+    // current baud rate (GbaLinkHub::safe_lookahead). Off, slices stop at 63.
+    // Deterministic from guest state; part of the match identity.
+    void set_link_lookahead(std::uint32_t cycles) { link_lookahead_ = cycles; }
     std::uint64_t cycle() const { return cycle_; }
     std::size_t machine_count() const { return machines_.size(); }
     gba::GbaLinkHub& cable();
@@ -84,5 +89,6 @@ private:
     bool native_slices_ = false;
     bool return_yields_ = true;
     bool owned_device_intervals_ = true;
+    std::uint32_t link_lookahead_ = 0;
 };
 } // namespace gbarecomp

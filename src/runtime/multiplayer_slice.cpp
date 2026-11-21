@@ -41,6 +41,29 @@ bool multiplayer_slice_safe(const gba::GbaBus& bus,const ArmCpuState& cpu) {
     // Thumb formats 1..5 contain only ALU/register/branch operations. These
     // dominate ordinary game code and need no decoded-memory metadata.
     if (thumb && word < 0x4800u) return true;
+    // ARM fast path, straight from the opcode bits (this runs before every
+    // guest instruction of a link session, and ARM inner loops such as IWRAM
+    // rasterisers otherwise pay a hash lookup each time). Same answers as the
+    // decoded path below; anything not listed here falls through to it.
+    if (!thumb && (word>>28)!=0xF) {
+        const auto cls=word&0x0E000000u;
+        if (cls==0x0A000000u) return true;                       // B, BL
+        if (cls==0x02000000u) return true;                       // data processing / MSR, immediate
+        if (cls==0x00000000u) {
+            // Register-operand data processing, multiplies, BX, MRS/MSR are
+            // plain; halfword/signed transfers and SWP (bit 7 and bit 4 set,
+            // with a non-zero SH field or the SWP pattern) are memory accesses.
+            if ((word&0x90u)!=0x90u) return true;
+            if ((word&0x60u)==0 && (word&0x0FB00FF0u)!=0x01000090u) return true;   // MUL/MLA/long multiplies
+        } else if (cls==0x04000000u) {
+            // LDR/STR/LDRB/STRB, immediate offset.
+            const unsigned rn=(word>>16)&15;
+            auto base=rn==15 ? pc+8u : cpu.R[rn];
+            const auto off=word&0xFFFu;
+            const auto address=(word&(1u<<24)) ? ((word&(1u<<23)) ? base+off : base-off) : base;
+            return plain_memory(address&~3u,(address&~3u)+3,(word&(1u<<20))!=0);
+        }
+    }
     // Classification depends on opcode bits and live registers, not on the
     // decode PC. Thumb's finite opcode space permits direct lookup instead of
     // hashing the guest PC at every generated instruction. Read actual bytes

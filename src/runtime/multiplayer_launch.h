@@ -90,6 +90,10 @@ struct GbaNetplayLaunch {
     // within three seconds (present_frame sees leave_armed meanwhile).
     // Closing the window always leaves.
     bool escape_leaves=true;
+    // Game capability, 0 = off: native slices may run this many cycles ahead
+    // while the cable is in multiplayer mode (GbaMultiplayerSession::
+    // set_link_lookahead). Far fewer slice switches; folded into the identity.
+    std::uint32_t link_lookahead=0;
     // Told once how the match ended, just before run returns or throws:
     // local = this player left; otherwise reason says what happened.
     std::function<void(bool local,const std::string& reason)> on_end;

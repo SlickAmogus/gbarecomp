@@ -65,6 +65,7 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
     config.links={std::move(link)};
     GbaMultiplayerSession simulation(std::move(config));
     simulation.set_native_slices(true);
+    simulation.set_link_lookahead(launch.link_lookahead);
     for (unsigned id=0;id<players;++id) {
         auto& m=simulation.machine(id);
         m.ppu.set_rasterization_enabled(false);
@@ -111,7 +112,8 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
     options.identity=std::string(launch.medium==GbaLinkMedium::Wireless ? "gba-wireless/1:" : "gba-cable/1:")+launch.program_id+":"+launch.build_identity+":"+
         boot.expected_rom_sha1+":"+boot.bios->sha1_hex()+":"+
         std::to_string(static_cast<unsigned>(boot.save.type))+":"+std::to_string(boot.save.size)+":"+
-        gba_netplay_seat_identity(launch)+":native-lle";
+        gba_netplay_seat_identity(launch)+":native-lle"+
+        (launch.link_lookahead ? ":link-lookahead="+std::to_string(launch.link_lookahead) : std::string());
     const auto identity_digest=gba::sha1(reinterpret_cast<const std::uint8_t*>(options.identity.data()),options.identity.size());
     options.build_fingerprint=std::uint32_t(identity_digest.bytes[0])|
         (std::uint32_t(identity_digest.bytes[1])<<8)|(std::uint32_t(identity_digest.bytes[2])<<16)|

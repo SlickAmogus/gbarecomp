@@ -811,7 +811,19 @@ static void account_host_service_instructions(uint32_t count) {
 }
 
 extern "C" void runtime_tick(uint32_t cycles) {
-    if (g_session_execution) { g_runtime_cycles += cycles; return; }
+    if (g_session_execution) {
+        // Link sessions honour a game's CPU time discount too; the shift and
+        // remainder belong to the bound machine (RuntimeTimingContext) and
+        // are part of its saved state, so every peer charges the same time.
+        if (g_runtime_cycle_discount_shift) {
+            const unsigned shift = g_runtime_cycle_discount_shift > 8u ? 8u : g_runtime_cycle_discount_shift;
+            g_cycle_discount_carry += cycles;
+            cycles = g_cycle_discount_carry >> shift;
+            g_cycle_discount_carry &= (1u << shift) - 1u;
+        }
+        g_runtime_cycles += cycles;
+        return;
+    }
     // P6 shadow-tick: a healed shard's validation re-run only accumulates its
     // cycle cost (for the cycle diff); the interpreter pass already pumped the
     // devices / delivered IRQs for this window, so do nothing else here.
@@ -1331,6 +1343,8 @@ void runtime_capture_timing_context(RuntimeTimingContext& out) {
     out.yielded_vblank = g_runtime_yielded_vblank_start;
     out.pending_cycles = g_pending_cycles;
     out.event_budget = g_event_budget;
+    out.discount_shift = g_runtime_cycle_discount_shift;
+    out.discount_carry = g_cycle_discount_carry;
 }
 bool native_service_window_allowed() {
     return !g_session_execution && !g_runtime_shadow_tick;
@@ -1348,6 +1362,8 @@ void runtime_restore_timing_context(const RuntimeTimingContext& in) {
     g_runtime_yielded_vblank_start = in.yielded_vblank;
     g_pending_cycles = in.pending_cycles;
     g_event_budget = in.event_budget;
+    g_runtime_cycle_discount_shift = in.discount_shift;
+    g_cycle_discount_carry = in.discount_carry;
     // These are speculative idle proofs, not guest state. Invalidating them
     // on rebinding prevents one machine's proof being applied to another.
     g_idle_sites.clear();

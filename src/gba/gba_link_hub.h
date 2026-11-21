@@ -28,6 +28,11 @@ public:
     bool synchronized() const;
     bool transfer_active() const { return active_; }
     std::uint64_t completion_cycle() const { return finish_; }
+    // How far one console may run ahead of the cable's clock without a newly
+    // started transfer completing unseen: under one multiplayer transfer at
+    // the current baud rate while every port is in multiplayer mode, else 63
+    // (an 8-bit normal-mode transfer at 2 MHz takes 64 cycles). Never above cap.
+    std::uint32_t safe_lookahead(std::uint32_t cap) const;
     std::vector<std::uint8_t> save_state() const;
     // Transactional: malformed or differently wired state leaves hub intact.
     bool load_state(std::span<const std::uint8_t> bytes, std::string* error);

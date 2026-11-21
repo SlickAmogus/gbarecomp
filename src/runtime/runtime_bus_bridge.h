@@ -42,6 +42,11 @@ struct RuntimeTimingContext {
     std::uint64_t yielded_vblank = 0;
     std::uint64_t pending_cycles = 0;
     std::int64_t event_budget = 0;
+    // CPU time discount (g_runtime_cycle_discount_shift) and its remainder.
+    // Per machine: a link session swaps them with the rest of the timing, and
+    // saves them, because a game hook that sets them changes guest scheduling.
+    unsigned discount_shift = 0;
+    std::uint32_t discount_carry = 0;
 };
 void runtime_capture_timing_context(RuntimeTimingContext&);
 void runtime_restore_timing_context(const RuntimeTimingContext&);

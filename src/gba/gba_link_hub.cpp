@@ -45,6 +45,13 @@ bool GbaLinkHub::normal(std::size_t port) const {
     const auto& p=ports_[port];
     return !(p.rcnt&0x8000) && !(p.control&0x2000);
 }
+std::uint32_t GbaLinkHub::safe_lookahead(std::uint32_t cap) const {
+    constexpr std::uint32_t kNormalFastest = 63;
+    for (std::size_t i = 0; i < count_; ++i)
+        if (!multiplayer(i)) return std::min(cap, kNormalFastest);
+    const auto duration = kTransferCycles[ports_[0].control & 3][count_ - 2];
+    return std::max(kNormalFastest, std::min(cap, duration - 1));
+}
 bool GbaLinkHub::ready() const {
     for (std::size_t i = 0; i < count_; ++i)
         if (!endpoints_[i]->connected() || !multiplayer(i)) return false;

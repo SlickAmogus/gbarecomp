@@ -953,8 +953,34 @@ const RuntimeNativeRamEntry* lookup_native_ram(uint32_t pc, bool thumb,
         const auto* bytes = g_runtime_ram_code_view(base, t.size);
         if (!bytes) return false;
         bool equal=t.masks ? true : std::memcmp(bytes,t.bytes,t.size)==0;
-        if (t.masks) for (uint32_t n=0;n<t.size;++n)
-            equal &= ((bytes[n]^t.bytes[n]) & t.masks[n])==0;
+        if (t.masks) {
+            // Masked templates (self-modifying code) are almost entirely
+            // fixed bytes: compare those runs with memcmp and only the few
+            // partly masked bytes one at a time. Runs are found once per
+            // template; same answer as comparing every byte under its mask.
+            struct Run { uint32_t start, size; bool exact; };
+            static std::vector<std::vector<Run>> runs;
+            if (runs.size() < g_native_ram_template_count) runs.resize(g_native_ram_template_count);
+            auto& r = runs[e.template_index];
+            if (r.empty()) {
+                for (uint32_t n=0;n<t.size;) {
+                    const bool exact=t.masks[n]==0xFFu;
+                    uint32_t m=n+1;
+                    while (m<t.size && (t.masks[m]==0xFFu)==exact) ++m;
+                    r.push_back({n,m-n,exact});
+                    n=m;
+                }
+            }
+            for (const Run& run : r) {
+                if (run.exact) {
+                    if (std::memcmp(bytes+run.start,t.bytes+run.start,run.size)) { equal=false; break; }
+                } else {
+                    for (uint32_t n=run.start;n<run.start+run.size;++n)
+                        if (((bytes[n]^t.bytes[n]) & t.masks[n])!=0) { equal=false; break; }
+                    if (!equal) break;
+                }
+            }
+        }
         if (equal) return true;
         if (runtime_trace_enabled()) {
             for (uint32_t n=0;n<t.size;++n)
