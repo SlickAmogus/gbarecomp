@@ -72,7 +72,30 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
         configure_save(m.bus.save(),boot.save);
         if (launch.setup_instance) launch.setup_instance(m);
     }
-    if (launch.resume_path.empty())
+    // Agreed opening: GBARECOMP_NETPLAY_OPENING names a text file of
+    // "seat first_tick last_tick mask" lines, every seat's pad for the
+    // match's first ticks (a game uses it to step all consoles through its
+    // menus to the chosen mode). Every peer knows all of it, so each runs it
+    // alone at full speed before connecting, from blank cartridges (owner
+    // saves differ between players; blank ones make every peer compute the
+    // same consoles). The match then starts there as a restored pair, whose
+    // startup agreement checks that the peers really arrived at one state.
+    struct OpeningRow { unsigned seat; std::uint32_t first, last; std::uint16_t mask; };
+    std::vector<OpeningRow> opening;
+    std::uint32_t opening_ticks=0;
+    if (const char* path=std::getenv("GBARECOMP_NETPLAY_OPENING"); path && *path && launch.resume_path.empty()) {
+        std::ifstream in(path);
+        unsigned long seat=0,first=0,last=0; std::string mask;
+        while (in>>seat>>first>>last>>mask) {
+            if (seat>=players || last<first || last>=1000000)
+                throw std::invalid_argument("invalid netplay opening row");
+            opening.push_back({static_cast<unsigned>(seat),static_cast<std::uint32_t>(first),
+                               static_cast<std::uint32_t>(last),
+                               static_cast<std::uint16_t>(std::stoul(mask,nullptr,0)&0x3ff)});
+            opening_ticks=std::max(opening_ticks,static_cast<std::uint32_t>(last+1));
+        }
+    }
+    if (launch.resume_path.empty() && opening.empty())
         load_owner_save(simulation.input_machine(launch.local_seat).bus.save(),boot.local_save);
     // Reject unsupported peripheral/enhancement state before opening transport.
     simulation.save_state();
@@ -110,6 +133,59 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
                                                           launch.view_policy.max_width);
     presentation = std::make_unique<GbaNetplayPresentation>(launch.view_policy, boot.affine_filter, boot.internal_resolution);
     presentation->request_width(initial_width);
+    HostWindow window;
+    if (!window.open(boot.scale,initial_width,160,boot.title.c_str(),boot.screen.c_str(),
+            boot.linear_filter,boot.sharp_filter,adaptive,true,boot.audio_rate))
+        throw std::runtime_error("cannot open netplay window");
+    window.load_input_config(boot.config_directory.string().c_str(),false);
+    window.set_fullscreen(boot.fullscreen); window.set_volume(boot.volume);
+    window.set_fps_readout(boot.show_fps);
+    if (!opening.empty()) {
+        // No picture is drawn meanwhile (no presentation observer yet): the
+        // game's present hook shows progress over a black screen.
+        using Clock=std::chrono::steady_clock;
+        const std::vector<std::uint8_t> black(240u*160u*3u,0);
+        std::vector<std::uint16_t> pads(players,0);
+        auto next_show=Clock::time_point{};
+        auto leave_armed_until=Clock::time_point{};
+        const auto started=Clock::now();
+        for (std::uint32_t tick=0;tick<opening_ticks;++tick) {
+            std::fill(pads.begin(),pads.end(),std::uint16_t{0});
+            for (const OpeningRow& row:opening)
+                if (tick>=row.first && tick<=row.last) pads[row.seat]=row.mask;
+            simulation.run_frame(pads);
+            simulation.discard_audio_output();
+            const auto now=Clock::now();
+            if (now<next_show && tick+1<opening_ticks) continue;
+            next_show=now+std::chrono::milliseconds(33);
+            auto events=window.pump();
+            if (events.quit && events.escape && !launch.escape_leaves && !events.terminating) {
+                if (now>=leave_armed_until) { leave_armed_until=now+std::chrono::seconds(3); events.quit=false; }
+            }
+            if (events.quit) { if (launch.on_end) launch.on_end(true,""); return 0; }
+            if (events.toggle_fullscreen) window.set_fullscreen(window.fullscreen() ? 0 : 1);
+            if (!window.set_surface_size(240,160)) throw std::runtime_error("cannot size netplay presentation surface");
+            window.set_view_margins(0,0,0,0);
+            if (launch.present_frame) {
+                GbaNetplayPresentFrame frame;
+                frame.guest_rgb=black.data(); frame.guest_width=240; frame.guest_height=160;
+                frame.local_bus=&simulation.input_machine(launch.local_seat).bus;
+                frame.tick=tick+1; frame.opening_end=opening_ticks;
+                frame.leave_armed=now<leave_armed_until;
+                if (!window.drawable_size(&frame.drawable_width,&frame.drawable_height) ||
+                    frame.drawable_width<=0 || frame.drawable_height<=0) {
+                    frame.drawable_width=960; frame.drawable_height=540;
+                }
+                if (launch.present_frame(frame) && frame.argb)
+                    window.set_external_frame(frame.argb,frame.width,frame.height);
+            }
+            window.present(black.data(),240,160);
+        }
+        std::printf("netplay opening: %u ticks in %.1f s\n",opening_ticks,
+            std::chrono::duration<double>(Clock::now()-started).count());
+        std::fflush(stdout);
+        options.restored_pair=true;
+    }
     simulation.input_machine(launch.local_seat).ppu.set_presentation_observer(presentation.get());
     struct DetachPresentation {
         GbaMultiplayerSession& simulation;
@@ -122,13 +198,6 @@ int run(const GbaNetplayLaunch& launch,const GbaNetplayBoot& boot) {
             rnet_session_start_lan_hub(match.transport(),launch.bind_endpoint.c_str()) :
             rnet_session_start_lan(match.transport(),launch.bind_endpoint.c_str(),launch.peer_endpoint.c_str())))
         throw std::runtime_error("cannot open netplay transport");
-    HostWindow window;
-    if (!window.open(boot.scale,initial_width,160,boot.title.c_str(),boot.screen.c_str(),
-            boot.linear_filter,boot.sharp_filter,adaptive,true,boot.audio_rate))
-        throw std::runtime_error("cannot open netplay window");
-    window.load_input_config(boot.config_directory.string().c_str(),false);
-    window.set_fullscreen(boot.fullscreen); window.set_volume(boot.volume);
-    window.set_fps_readout(boot.show_fps);
     std::uint16_t buttons=0;
     // Test aid (scripted two-process runs with the SDL dummy driver):
     // GBARECOMP_NETPLAY_SCRIPT names a text file of "first_tick last_tick
